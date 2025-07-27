@@ -205,8 +205,7 @@ mod tests {
     fn test_gitattributes_multiple_attributes() {
         let input = b"*.bin filter=lfs diff=binary\n";
         assert!(matches(input, "file.bin"));
-        assert!(!matches(b"*.bin diff=binary\n", "file.bin")); // Only testing
-                                                               // filter=lfs
+        assert!(!matches(b"*.bin diff=binary\n", "file.bin")); // Only testing filter=lfs
     }
 
     #[test]
