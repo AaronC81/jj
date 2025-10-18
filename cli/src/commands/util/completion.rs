@@ -71,6 +71,7 @@ enum ShellCompletion {
     Nushell,
     PowerShell,
     Zsh,
+    Clink,
 }
 
 impl ShellCompletion {
@@ -78,6 +79,7 @@ impl ShellCompletion {
         use clap_complete::Shell;
         use clap_complete::generate;
         use clap_complete_nushell::Nushell;
+        use clap_complete_clink::Clink;
 
         let mut buf = Vec::new();
 
@@ -90,6 +92,7 @@ impl ShellCompletion {
             Self::Nushell => generate(Nushell, cmd, bin_name, &mut buf),
             Self::PowerShell => generate(Shell::PowerShell, cmd, bin_name, &mut buf),
             Self::Zsh => generate(Shell::Zsh, cmd, bin_name, &mut buf),
+            Self::Clink => generate(Clink, cmd, bin_name, &mut buf),
         }
 
         buf
