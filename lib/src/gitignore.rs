@@ -24,6 +24,9 @@ use std::sync::Arc;
 use ignore::gitignore;
 use thiserror::Error;
 
+use crate::config::ConfigGetResultExt;
+use crate::settings::UserSettings;
+
 #[derive(Debug, Error)]
 pub enum GitIgnoreError {
     #[error("Failed to read ignore patterns from file {path}")]
@@ -47,13 +50,18 @@ pub enum GitIgnoreError {
 pub struct GitIgnoreFile {
     parent: Option<Arc<GitIgnoreFile>>,
     matcher: gitignore::Gitignore,
+    case_insensitive: bool,
 }
 
 impl GitIgnoreFile {
-    pub fn empty() -> Arc<Self> {
+    pub fn empty(settings: &UserSettings) -> Arc<Self> {
         Arc::new(Self {
             parent: None,
             matcher: gitignore::Gitignore::empty(),
+            case_insensitive: settings.get_bool("aaronc81.case-insensitive-gitignore")
+                .optional()
+                .expect("")
+                .unwrap_or(false), // This is a fork! Proper error handling, begone ;)
         })
     }
 
@@ -67,7 +75,14 @@ impl GitIgnoreFile {
         ignore_path: &Path,
         input: &[u8],
     ) -> Result<Arc<Self>, GitIgnoreError> {
+        let case_insensitive = self.case_insensitive;
         let mut builder = gitignore::GitignoreBuilder::new(prefix);
+        builder
+            .case_insensitive(case_insensitive)
+            .map_err(|err| GitIgnoreError::Underlying {
+                path: ignore_path.to_path_buf(),
+                source: err,
+            })?;
         for (i, input_line) in input.split(|b| *b == b'\n').enumerate() {
             let line =
                 std::str::from_utf8(input_line).map_err(|err| GitIgnoreError::InvalidUtf8 {
@@ -95,7 +110,7 @@ impl GitIgnoreFile {
         } else {
             Some(self.clone())
         };
-        Ok(Arc::new(Self { parent, matcher }))
+        Ok(Arc::new(Self { parent, matcher, case_insensitive }))
     }
 
     /// Concatenates new `.gitignore` file at the `prefix` directory.
@@ -140,7 +155,7 @@ impl GitIgnoreFile {
     /// ignored in the repository should take into account that all (untracked)
     /// files within a ignored directory should be ignored unconditionally.
     /// The code in this file does not take that into account.
-    pub fn matches(&self, path: &str) -> bool {
+    pub fn matches(&self, path: &str) -> bool {        
         //If path ends with slash, consider it as a directory.
         let (path, is_dir) = match path.strip_suffix('/') {
             Some(path) => (path, true),
@@ -153,10 +168,12 @@ impl GitIgnoreFile {
 #[cfg(test)]
 mod tests {
 
+    use crate::config::{ConfigLayer, ConfigSource, StackedConfig};
+
     use super::*;
 
     fn matches(input: &[u8], path: &str) -> bool {
-        let file = GitIgnoreFile::empty()
+        let file = GitIgnoreFile::empty(&user_settings())
             .chain("", Path::new(""), input)
             .unwrap();
         file.matches(path)
@@ -164,13 +181,13 @@ mod tests {
 
     #[test]
     fn test_gitignore_empty_file() {
-        let file = GitIgnoreFile::empty();
+        let file = GitIgnoreFile::empty(&user_settings());
         assert!(!file.matches("foo"));
     }
 
     #[test]
     fn test_gitignore_empty_file_with_prefix() {
-        let file = GitIgnoreFile::empty()
+        let file = GitIgnoreFile::empty(&user_settings())
             .chain("dir/", Path::new(""), b"")
             .unwrap();
         assert!(!file.matches("dir/foo"));
@@ -178,7 +195,7 @@ mod tests {
 
     #[test]
     fn test_gitignore_literal() {
-        let file = GitIgnoreFile::empty()
+        let file = GitIgnoreFile::empty(&user_settings())
             .chain("", Path::new(""), b"foo\n")
             .unwrap();
         assert!(file.matches("foo"));
@@ -190,7 +207,7 @@ mod tests {
 
     #[test]
     fn test_gitignore_literal_with_prefix() {
-        let file = GitIgnoreFile::empty()
+        let file = GitIgnoreFile::empty(&user_settings())
             .chain("./dir/", Path::new(""), b"foo\n")
             .unwrap();
         assert!(file.matches("dir/foo"));
@@ -199,7 +216,7 @@ mod tests {
 
     #[test]
     fn test_gitignore_pattern_same_as_prefix() {
-        let file = GitIgnoreFile::empty()
+        let file = GitIgnoreFile::empty(&user_settings())
             .chain("dir/", Path::new(""), b"dir\n")
             .unwrap();
         assert!(file.matches("dir/dir"));
@@ -209,7 +226,7 @@ mod tests {
 
     #[test]
     fn test_gitignore_rooted_literal() {
-        let file = GitIgnoreFile::empty()
+        let file = GitIgnoreFile::empty(&user_settings())
             .chain("", Path::new(""), b"/foo\n")
             .unwrap();
         assert!(file.matches("foo"));
@@ -218,7 +235,7 @@ mod tests {
 
     #[test]
     fn test_gitignore_rooted_literal_with_prefix() {
-        let file = GitIgnoreFile::empty()
+        let file = GitIgnoreFile::empty(&user_settings())
             .chain("dir/", Path::new(""), b"/foo\n")
             .unwrap();
         assert!(file.matches("dir/foo"));
@@ -227,7 +244,7 @@ mod tests {
 
     #[test]
     fn test_gitignore_deep_dir() {
-        let file = GitIgnoreFile::empty()
+        let file = GitIgnoreFile::empty(&user_settings())
             .chain("", Path::new(""), b"/dir1/dir2/dir3\n")
             .unwrap();
         assert!(!file.matches("foo"));
@@ -240,7 +257,7 @@ mod tests {
     #[test]
     fn test_gitignore_deep_dir_chained() {
         // Prefix is relative to root, not to parent file
-        let file = GitIgnoreFile::empty()
+        let file = GitIgnoreFile::empty(&user_settings())
             .chain("", Path::new(""), b"/dummy\n")
             .unwrap()
             .chain("dir1/", Path::new(""), b"/dummy\n")
@@ -256,7 +273,7 @@ mod tests {
 
     #[test]
     fn test_gitignore_match_only_dir() {
-        let file = GitIgnoreFile::empty()
+        let file = GitIgnoreFile::empty(&user_settings())
             .chain("", Path::new(""), b"/dir/\n")
             .unwrap();
         assert!(!file.matches("dir"));
@@ -273,7 +290,7 @@ mod tests {
         assert!(!matches(b"\\?\n", "x"));
         assert!(matches(b"\\w\n", "w"));
         assert!(
-            GitIgnoreFile::empty()
+            GitIgnoreFile::empty(&user_settings())
                 .chain("", Path::new(""), b"\\\n")
                 .is_err()
         );
@@ -330,7 +347,7 @@ mod tests {
         assert!(matches(b"\ra\n", "\ra"));
         assert!(!matches(b"\ra\n", "a"));
         assert!(
-            GitIgnoreFile::empty()
+            GitIgnoreFile::empty(&user_settings())
                 .chain("", Path::new(""), b"a b \\  \n")
                 .is_err()
         );
@@ -372,7 +389,7 @@ mod tests {
 
     #[test]
     fn test_gitignore_leading_dir_glob_with_prefix() {
-        let file = GitIgnoreFile::empty()
+        let file = GitIgnoreFile::empty(&user_settings())
             .chain("dir1/dir2/", Path::new(""), b"**/foo\n")
             .unwrap();
         assert!(file.matches("dir1/dir2/foo"));
@@ -419,7 +436,7 @@ mod tests {
 
     #[test]
     fn test_gitignore_file_ordering() {
-        let file1 = GitIgnoreFile::empty()
+        let file1 = GitIgnoreFile::empty(&user_settings())
             .chain("", Path::new(""), b"/foo\n")
             .unwrap();
         let file2 = file1.chain("foo/", Path::new(""), b"!/bar").unwrap();
@@ -447,14 +464,42 @@ mod tests {
         //   git check-ignore A/B.ext
         // A/B.ext
         // ```
-        let ignore = GitIgnoreFile::empty()
+        let ignore = GitIgnoreFile::empty(&user_settings())
             .chain("", Path::new(""), b"foo/bar.*\n!/foo/\n")
             .unwrap();
         assert!(ignore.matches("foo/bar.ext"));
 
-        let ignore = GitIgnoreFile::empty()
+        let ignore = GitIgnoreFile::empty(&user_settings())
             .chain("", Path::new(""), b"!/foo/\nfoo/bar.*\n")
             .unwrap();
         assert!(ignore.matches("foo/bar.ext"));
+    }
+
+    #[test]
+    fn test_gitignore_case_insensitive() {
+        // Case-sensitive by default
+        let ignore = GitIgnoreFile::empty(&user_settings())
+            .chain("", Path::new(""), b"foo\n")
+            .unwrap();
+        assert!(ignore.matches("foo"));
+        assert!(!ignore.matches("Foo"));
+
+        // Case-insensitive by configuration
+        let mut config = StackedConfig::with_defaults();
+        config.add_layer(Arc::new(
+            ConfigLayer::parse(ConfigSource::CommandArg, "aaronc81.case-insensitive-gitignore = true\n")
+                .unwrap()
+        ));
+        let settings = UserSettings::from_config(config).unwrap();
+        let ignore = GitIgnoreFile::empty(&settings)
+            .chain("", Path::new(""), b"foo\n")
+            .unwrap();
+        assert!(ignore.matches("foo"));
+        assert!(ignore.matches("Foo"));
+    }
+
+    fn user_settings() -> UserSettings {
+        let config = StackedConfig::with_defaults();
+        UserSettings::from_config(config).unwrap()
     }
 }

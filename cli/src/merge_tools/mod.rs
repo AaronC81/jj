@@ -526,7 +526,7 @@ mod tests {
             DiffEditor::with_name(
                 name,
                 &settings,
-                GitIgnoreFile::empty(),
+                GitIgnoreFile::empty(&settings),
                 Arc::new(GitAttributesFile::default()),
                 ConflictMarkerStyle::Diff,
             )
@@ -604,7 +604,7 @@ mod tests {
             DiffEditor::from_settings(
                 &ui,
                 &settings,
-                GitIgnoreFile::empty(),
+                GitIgnoreFile::empty(&settings),
                 Arc::new(GitAttributesFile::default()),
                 ConflictMarkerStyle::Diff,
             )

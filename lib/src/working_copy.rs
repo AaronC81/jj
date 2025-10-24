@@ -28,6 +28,7 @@ use tracing::instrument;
 use crate::backend::BackendError;
 use crate::backend::MergedTreeId;
 use crate::commit::Commit;
+use crate::config::StackedConfig;
 use crate::dag_walk;
 use crate::gitattributes::GitAttributesError;
 use crate::gitattributes::GitAttributesFile;
@@ -227,8 +228,11 @@ pub struct SnapshotOptions<'a> {
 impl SnapshotOptions<'_> {
     /// Create an instance for use in tests.
     pub fn empty_for_test() -> Self {
+        let config = StackedConfig::with_defaults();
+        let user_settings = UserSettings::from_config(config).unwrap();
+
         Self {
-            base_ignores: GitIgnoreFile::empty(),
+            base_ignores: GitIgnoreFile::empty(&user_settings),
             base_attributes: Arc::new(GitAttributesFile::default()),
             progress: None,
             start_tracking_matcher: &EverythingMatcher,
